@@ -18,6 +18,18 @@ register(
     nondeterministic=True,
 )
 
+register(
+    id='vladfi1/SSBM-headless-v0',
+    entry_point='dolphin:simpleSSBMEnv',
+    reward_threshold=1,
+    timestep_limit=9999999,
+    kwargs=dict(
+      cpu=9,
+      stage='battlefield',
+    ),
+    nondeterministic=True,
+)
+
 # Scoreboard registration
 # ==========================
 add_group(
