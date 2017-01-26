@@ -105,10 +105,10 @@ frameConv = RealConv(0, 100, 'frame')
 speedConv = RealConv(-20, 20, 'speed') # generally less than 1 in magnitude
 
 player_spec = [
-  ('percent', RealConv(0, 200)),
+  ('percent', RealConv(0, 999)),
   ('facing', RealConv(-1, 1)),
-  ('x', RealConv(-200, 200)),
-  ('y', RealConv(-200, 200)),
+  ('x', RealConv(-250, 250)),
+  ('y', RealConv(-250, 250)),
   ('action_state', DiscreteConv(numActions)),
   ('action_frame', frameConv),
   ('character', DiscreteConv(maxCharacter)),
