@@ -259,10 +259,12 @@ class DolphinRunner(Default):
   
     if self.gui:
       self.exe = 'dolphin-emu-nogui'
-      kwargs.update(
-        speed = 1,
-        gfx = 'OGL',
-      )
+      
+      if 'speed' not in kwargs:
+        kwargs['speed'] = 1
+      
+      if 'gfx' not in kwargs:
+        kwargs['gfx'] = 'OGL'
       
       if self.mute:
         kwargs.update(audio = 'No audio backend')
