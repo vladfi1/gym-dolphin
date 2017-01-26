@@ -19,7 +19,7 @@ def processDamages(percents):
   return np.array(util.zipWith(lambda prev, next: max(next-prev, 0), percents, percents[1:]))
 
 # from player 1's perspective
-def computeRewards(states, enemies=[1], allies=[0], damage_ratio=0.01):
+def computeRewards(states, enemies=[0], allies=[1], damage_ratio=0.01):
   players = enemies + allies
 
   deaths = {p : processDeaths([isDying(state.players[p]) for state in states]) for p in players}
