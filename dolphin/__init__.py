@@ -1,13 +1,16 @@
 from gym.envs.registration import register
 from gym.scoreboard.registration import add_task, add_group
 
-from .ssbm_env import SSBMEnv
+from .ssbm_env import SSBMEnv, simpleSSBMEnv
 
 register(
     id='vladfi1/SSBM-v0',
-    entry_point='ssbm_env:simpleSSBMEnv',
+    entry_point='dolphin:simpleSSBMEnv',
     reward_threshold=1,
-    kwargs=dict(),
+    kwargs=dict(
+      cpu=9,
+      gui=True,
+    ),
     nondeterministic=True,
 )
 

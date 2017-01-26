@@ -2,6 +2,8 @@ from numpy import random
 import functools
 import operator
 from threading import Thread
+import hashlib
+import os
 
 def foldl(f, init, l):
   for x in l:
@@ -52,18 +54,20 @@ def compose(*fs):
 def deepMap(f, obj):
   if isinstance(obj, dict):
     return {k : deepMap(f, v) for k, v in obj.items()}
-  if isinstance(obj, list):
-    return [deepMap(f, x) for x in obj]
+  if isinstance(obj, (list, tuple)):
+    return type(obj)(deepMap(f, x) for x in obj)
   return f(obj)
 
 def deepValues(obj):
   if isinstance(obj, dict):
     for v in obj.values():
-      yield from deepValues(v)
+      for x in deepValues(v):
+        yield x
   elif isinstance(obj, list):
     for v in obj:
-      yield from deepValues(v)
-  else:
+      for x in deepValues(v):
+        yield x
+  else: # note that tuples are values, not lists
     yield obj
 
 def deepZip(*objs):
@@ -73,7 +77,7 @@ def deepZip(*objs):
   first = objs[0]
   if isinstance(first, dict):
     return {k : deepZip(*[obj[k] for obj in objs]) for k in first}
-  if isinstance(first, list):
+  if isinstance(first, (list, tuple)):
     return zipWith(deepZip, *objs)
   return objs
 
@@ -147,4 +151,35 @@ class CircularQueue:
   
   def as_list(self):
     return self.array[self.index:] + self.array[:self.index]
+
+def hashString(s):
+  s = s.encode()
+  return hashlib.md5(s).hexdigest()
+
+def port(s):
+  print("PORT", s)
+  return 5536 + int(hashString(s), 16) % 60000
+
+def makedirs(path):
+  if not os.path.exists(path):
+    os.makedirs(path)
+
+def update(dikt, **kwargs):
+  for k, v in kwargs.items():
+    if v is not None:
+      dikt[k] = v
+    elif k not in dikt:
+      dikt[k] = None
+
+def load_params(path, key=None):
+  import json
+  with open(path + 'params') as f:
+    params = json.load(f)
+  
+  # support old-style separation of params into train and agent
+  if key and key in params:
+    params.update(params[key])
+  
+  params.update(path=path)
+  return params
 

@@ -8,11 +8,12 @@ import os
 import time
 from warnings import warn
 
+from .default import *
 from . import ssbm, state_manager, memory_watcher, movie, util
 from .menu_manager import *
 from .state import *
 from .pad import Pad
-from .dolphin import runDolphin
+from .dolphin import DolphinRunner
 from . import ctype_util as ctutil
 from .reward import computeRewards
 
@@ -142,75 +143,66 @@ gameConv = StructConv(game_spec)
 
 gameConv1 = StructConv(gameSpec(swap=True))
 
-default_args = dict(
-  tag=None,
-  dolphin_dir = 'dolphin/',
-  self_play = True,
-  zmq=True,
-  p1="marth",
-  p2="fox",
-  stage="battlefield",
-  iso="SSBM.iso",
-)
+class SSBMEnv(gym.Env, Default):
+  _options = [
+    #Option('user', type=str, help="dolphin user directory"),
+    Option('zmq', type=bool, default=True, help="use zmq for memory watcher"),
+    Option('stage', type=str, default="final_destination", choices=movie.stages.keys(), help="which stage to play on"),
+    #Option('enemy', type=str, help="load enemy agent from file"),
+    #Option('enemy_reload', type=int, default=0, help="enemy reload interval"),
+    Option('cpu', type=int, default=1, help="enemy cpu level"),
+  ] + [Option('p%d' % i, type=str, choices=characters.keys(), default="falcon", help="character for player %d" % i) for i in [1, 2]]
+  
+  _members = [
+    ('dolphinRunner', DolphinRunner)
+  ]
 
-class SSBMEnv(gym.Env):
   def __init__(self, **kwargs):
-    for k, v in default_args.items():
-      if k in kwargs and kwargs[k] is not None:
-          setattr(self, k, kwargs[k])
-      else:
-          setattr(self, k, v)
-                
+    Default.__init__(self, init_members=False, **kwargs)
+    
     self.observation_space = gameConv.space
     self.action_space = controller_space
     self.realController = realController
     
     self.first_frame = True
     self.toggle = False
-
-    if self.tag is None:
-      self.tag = random.getrandbits(32)
     
-    self.dolphin_dir += str(self.tag) + "/"
-    #self.dolphin_dir = os.path.expanduser(self.dolphin_dir)
-
     self.prev_state = ssbm.GameMemory()
     self.state = ssbm.GameMemory()
     # track players 1 and 2 (pids 0 and 1)
     self.sm = state_manager.StateManager([0, 1])
-    self.write_locations()
+
+    self.pids = [1]
+    self.cpus = {1: None}
+    self.characters = {1: self.p2}
     
-    self.cpus = [0, 1]# if self.self_play else [0]
-    self.characters = [self.p1, self.p2] if self.self_play else [self.p1]
+    if self.cpu:
+      self.pids.append(0)
+      self.cpus[0] = self.cpu
+      self.characters[0] = self.p1
+    
+    self._init_members(cpus=self.pids, **kwargs)
+    self.user = self.dolphinRunner.user
 
-    # sets the game mode and random stage
-    self.movie = movie.Movie(movie.endless_netplay_battlefield)
-
+    self.write_locations()
     print('Creating MemoryWatcher.')
     mwType = memory_watcher.MemoryWatcher
     if self.zmq:
       mwType = memory_watcher.MemoryWatcherZMQ
-    self.mw = mwType(self.dolphin_dir + '/MemoryWatcher/MemoryWatcher')
+    self.mw = mwType(self.user + '/MemoryWatcher/MemoryWatcher')
     
-    pipe_dir = self.dolphin_dir + '/Pipes/'
+    pipe_dir = self.user + '/Pipes/'
     print('Creating Pads at %s.' % pipe_dir)
-    os.makedirs(self.dolphin_dir + '/Pipes/', exist_ok=True)
-    
-    paths = [pipe_dir + 'phillip%d' % i for i in self.cpus]
+    os.makedirs(self.user + '/Pipes/', exist_ok=True)
+
+    paths = [pipe_dir + 'phillip%d' % i for i in self.pids]
     self.get_pads = util.async_map(Pad, paths)
     
-    time.sleep(1) # give pads time to set up
+    time.sleep(2) # give pads time to set up
     
-    config = dict(
-      user=self.dolphin_dir,
-      cpus=self.cpus,
-      cpu_thread=True,
-      gfx='OGL',
-      #exe='dolphin-emu-headless',
-    )
-    config.update(kwargs)
+    self.dolphin_process = self.dolphinRunner()
     
-    self.dolphin_process = runDolphin(**config)
+    time.sleep(2) # let dolphin connect to the memory watcher
     
     try:
       self.pads = self.get_pads()
@@ -218,21 +210,10 @@ class SSBMEnv(gym.Env):
       print("Pipes not initialized!")
       return
     
-    self.menu_managers = [MenuManager(characters[c], pid=i, pad=p) for c, i, p in zip(self.characters, self.cpus, self.pads)]
-    self.settings_mm = MenuManager(settings, pid=self.cpus[0], pad=self.pads[0])
-    
-    # FIXME: what do these do?
-    #self._seed()
-    self.reset()
-    self.viewer = None
-
-    # Just need to initialize the relevant attributes
-    self._configure()
-    
     self.setup()
 
   def write_locations(self):
-    path = self.dolphin_dir + '/MemoryWatcher/'
+    path = self.user + '/MemoryWatcher/'
     os.makedirs(path, exist_ok=True)
     print('Writing locations to:', path)
     with open(path + 'Locations.txt', 'w') as f:
@@ -241,7 +222,7 @@ class SSBMEnv(gym.Env):
   def _close(self):
     self.dolphin_process.terminate()
     import shutil
-    shutil.rmtree(self.dolphin_dir)
+    shutil.rmtree(self.user)
   
   def update_state(self):
     ctutil.copy(self.state, self.prev_state)
@@ -252,30 +233,69 @@ class SSBMEnv(gym.Env):
   def setup(self):
     self.update_state()
     
-    while self.state.menu in [menu.value for menu in [Menu.Characters, Menu.Stages]]:
+    pick_chars = []
+    
+    tapA = [
+      (0, movie.pushButton(Button.A)),
+      (0, movie.releaseButton(Button.A)),
+    ]
+    
+    for pid, pad in zip(self.pids, self.pads):
+      actions = []
+      
+      cpu = self.cpus[pid]
+      
+      if cpu:
+        actions.append(MoveTo([0, 20], pid, pad, True))
+        actions.append(movie.Movie(tapA, pad))
+        actions.append(movie.Movie(tapA, pad))
+        actions.append(MoveTo([0, -14], pid, pad, True))
+        actions.append(movie.Movie(tapA, pad))
+        actions.append(MoveTo([cpu * 1.1, 0], pid, pad, True))
+        actions.append(movie.Movie(tapA, pad))
+        #actions.append(Wait(10000))
+      
+      actions.append(MoveTo(characters[self.characters[pid]], pid, pad))
+      actions.append(movie.Movie(tapA, pad))
+      
+      pick_chars.append(Sequential(*actions))
+    
+    pick_chars = Parallel(*pick_chars)
+    
+    enter_settings = Sequential(
+        MoveTo(settings, self.pids[0], self.pads[0]),
+        movie.Movie(tapA, self.pads[0])
+    )
+    
+    # sets the game mode and picks the stage
+    start_game = movie.Movie(movie.endless_netplay + movie.stages[self.stage], self.pads[0])
+    
+    self.navigate_menus = Sequential(pick_chars, enter_settings, start_game)
+    
+    char_stages = [menu.value for menu in [Menu.Characters, Menu.Stages]]
+    
+    print("Navigating menus.")
+    while self.state.menu in char_stages:
       self.mw.advance()
       last_frame = self.state.frame
       self.update_state()
       
       if self.state.frame > last_frame:
-        # FIXME: this is very convoluted
-        done = True
-        for mm in self.menu_managers:
-          if not mm.reached:
-            done = False
-          mm.move(self.state)
+        print("nav")
+        self.navigate_menus.move(self.state)
         
-        if done:
-          #print("menu_managers done")
-          if self.settings_mm.reached:
-            #print("playing movie")
-            self.movie.play(self.pads[0])
-          else:
-            #print("settings_mm")
-            self.settings_mm.move(self.state)
+        if self.navigate_menus.done():
+          for pid, pad in zip(self.pids, self.pads):
+            if self.characters[pid] == 'sheik':
+              pad.press_button(Button.A)
     
     print("setup finished")
     assert(self.state.menu == Menu.Game.value)
+    
+    # get rid of weird initial conditions
+    for _ in range(10):
+      self.mw.advance()
+      self.update_state()
 
   def _seed(self, seed=None):
     from gym.utils import seeding
@@ -299,7 +319,7 @@ class SSBMEnv(gym.Env):
     return gameConv(self.state)
 
 def simpleSSBMEnv(act_every=3, **kwargs):
-  env = SmashEnv(**kwargs)
+  env = SSBMEnv(**kwargs)
   env.action_space = spaces.Discrete(len(ssbm.simpleControllerStates))
   env.realController = lambda action: ssbm.simpleControllerStates[action].realController()
   
