@@ -281,7 +281,6 @@ class SSBMEnv(gym.Env, Default):
       self.update_state()
       
       if self.state.frame > last_frame:
-        print("nav")
         self.navigate_menus.move(self.state)
         
         if self.navigate_menus.done():
@@ -303,7 +302,8 @@ class SSBMEnv(gym.Env, Default):
     return [seed]
 
   def _step(self, action):
-    assert self.action_space.contains(action), "%r (%s) invalid" % (action, type(action))
+    #import ipdb; ipdb.set_trace()
+    #assert self.action_space.contains(action), "%r (%s) invalid" % (action, type(action))
     
     self.pads[0].send_controller(self.realController(action))
     
@@ -317,11 +317,19 @@ class SSBMEnv(gym.Env, Default):
 
   def _reset(self):
     return gameConv(self.state)
+  
+  #def _render(self):
+  #  pass
 
 def simpleSSBMEnv(act_every=3, **kwargs):
   env = SSBMEnv(**kwargs)
+  
+  # TODO: make this a wrapper
   env.action_space = spaces.Discrete(len(ssbm.simpleControllerStates))
   env.realController = lambda action: ssbm.simpleControllerStates[action].realController()
+
+  from .box_wrapper import BoxWrapper
+  env = BoxWrapper(env)
   
   from gym.wrappers import SkipWrapper
   return SkipWrapper(3)(env)
